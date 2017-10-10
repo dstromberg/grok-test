@@ -1,0 +1,315 @@
+#!/usr/bin/python
+
+# pylint: disable=simplifiable-if-statement
+# simplifiable-if-statement: if's a sometimes nicer for debugging
+
+'''Run pylint using a 2.x and a 3.x interpreter, and optionally ignore some messages'''
+
+import os
+import re
+import sys
+import subprocess
+
+IGNORE_MESSAGES = []
+
+DEFAULT_PYLINT_2 = '/usr/local/cpython-2.7/bin/pylint'
+DEFAULT_PYLINT_3 = '/usr/local/cpython-3.4/bin/pylint'
+PYLINT2_LIST = []
+PYLINT3_LIST = []
+
+
+def usage(retval):
+    '''Output a usage message'''
+    write = sys.stderr.write
+    write('Usage: %s\n' % sys.argv[0])
+    write('    --ignore-message re1 --ignore-message re2\n')
+    write('    --verbose\n')
+    write('    --which-2 %s\n' % (DEFAULT_PYLINT_2, ))
+    write('    --which-3 %s\n' % (DEFAULT_PYLINT_3, ))
+    write('    --which-python-2 /path/to/python2\n')
+    write('    --which-python-3 /path/to/python3\n')
+    write('    --to-pylint args\n')
+    write('\n')
+    write('--which-2 and --which-3 specify the path to a pylint for python\n')
+    write('2.x or 3.x respectively.  They can also be specified as "None" to skip\n')
+    write('checking 2.x or 3.x.  Naturally, if you skip both, no checks are run.\n')
+    write('\n')
+    write('Instead of --which-2 or --which-3, you can give --which-python-2 or\n')
+    write('--which-python-3 in which case pylint will be run via:\n')
+    write('/path/to/python3 -m pylint (for example)\n')
+    sys.exit(retval)
+
+
+def get_output_ignore_exit_code(command):
+    '''Run a subprocess.  Return its stdout.  Ignore the exit code'''
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    stdout = process.stdout.read()
+    _unused = process.wait()
+    lines = stdout.split(b'\n')
+    return lines
+
+
+def is_relevant_line(line):
+    '''Classify a pylint line as relevant or irrelevant'''
+    for prefix in [b'***', b'C:', b'E:', b'F:', b'I:', b'R:', b'W:']:
+        if line.startswith(prefix):
+            return True
+    return False
+
+
+def is_traceback_line(line):
+    '''Return True iff this line is a traceback'''
+    if line.startswith(b'Traceback (most recent call last):'):
+        return True
+    return False
+
+
+def has_traceback(lines):
+    '''Return True iff there is a traceback present in lines'''
+    if any(is_traceback_line(line) for line in lines):
+        return True
+    return False
+
+
+def is_usage_line(line):
+    '''Return True iff this line indicates a usage message'''
+    # Note that this gets pylint and pylint3, because it's a substring search
+    if 'Usage:  pylint' in line:
+        return True
+    return False
+
+
+def has_usage_message(lines):
+    '''Return True iff there is a usage message present in lines'''
+    if any(is_usage_line(line) for line in lines):
+        return True
+    return False
+
+
+def is_score_line(line):
+    '''Return True iff this line has a score message'''
+    if 'Your code has been rated at' in line:
+        return True
+    return False
+
+
+def has_score_message(lines):
+    '''Return True iff there is a score message present in lines'''
+    if any(is_score_line(line) for line in lines):
+        return True
+    return False
+
+
+def remove_semi_relevant(lines):
+    '''Remove semi-relevant lines'''
+    for line in lines:
+        if is_semi_relevant_line(line):
+            pass
+        else:
+            yield line
+
+
+def is_semi_relevant_line(line):
+    '''Return True iff line is semi-relevant'''
+    if b'FIXME' in line:
+        return True
+    elif line.startswith(b'I:') and b'Locally disabling' in line:
+        return True
+    elif line.startswith(b'***'):
+        return True
+
+    for ignore_message in IGNORE_MESSAGES:
+        # We compile these more than necessary, but this isn't really much of a bottleneck
+        ignore_regex = re.compile(ignore_message, re.IGNORECASE)
+        match = ignore_regex.match(line)
+        if match:
+            return True
+    return False
+
+
+def to_bytes(string):
+    '''Convert string to bytes'''
+    try:
+        result = bytes(string, 'ASCII')
+    except TypeError:
+        result = string
+    return result
+
+
+class Options(object):
+    # pylint: disable=too-few-public-methods
+    '''Deal with command line options'''
+    def __init__(self):
+        # pylint: disable=global-statement,too-many-branches,too-many-statements
+        # too-many-branches: argument parsing almost always has "too many" branches
+        global PYLINT2_LIST
+        global PYLINT3_LIST
+        if 'PYLINT_ARGS' in os.environ:
+            self.to_pylint = os.environ['PYLINT_ARGS'].split(' ')
+        else:
+            self.to_pylint = []
+        self.verbose = False
+        while sys.argv[1:]:
+            if sys.argv[1] == '--ignore-message':
+                IGNORE_MESSAGES.append(to_bytes(sys.argv[2]))
+                del sys.argv[1]
+            elif sys.argv[1] == '--verbose':
+                self.verbose = True
+            elif sys.argv[1] == '--which-2':
+                lower_argv_2 = sys.argv[2].lower()
+                if lower_argv_2 == 'none':
+                    PYLINT2_LIST = None
+                else:
+                    if os.path.exists(sys.argv[2]):
+                        if sys.argv[2].endswith('/python'):
+                            tuple_ = (sys.argv[0], sys.argv[2])
+                            sys.stderr.write('{}: {} ends with /python, but must be a pylint\n'.format(*tuple_))
+                            sys.exit(1)
+                        if sys.argv[2].endswith('/python3'):
+                            tuple_ = (sys.argv[0], sys.argv[2])
+                            sys.stderr.write('{}: {} ends with /python3, but must be a _pylint_ _2_\n'.format(*tuple_))
+                            sys.exit(1)
+                        PYLINT2_LIST = [sys.argv[2]]
+                    else:
+                        sys.stderr.write('{}: {} does not exist\n'.format(sys.argv[0], sys.argv[2]))
+                        sys.exit(1)
+                del sys.argv[1]
+            elif sys.argv[1] == '--which-3':
+                lower_argv_2 = sys.argv[2].lower()
+                if lower_argv_2 == 'none':
+                    PYLINT3_LIST = None
+                else:
+                    if os.path.exists(sys.argv[2]):
+                        if sys.argv[2].endswith('/python') or sys.argv[2].endswith('/python3'):
+                            tuple_ = (sys.argv[0], sys.argv[2])
+                            string = '{}: {} ends with /python or /python3, but must be a pylint\n'
+                            sys.stderr.write(string.format(*tuple_))
+                            sys.exit(1)
+                        PYLINT3_LIST = [sys.argv[2]]
+                    else:
+                        sys.stderr.write('{}: {} does not exist\n'.format(sys.argv[0], sys.argv[2]))
+                        sys.exit(1)
+                del sys.argv[1]
+            elif sys.argv[1] == '--which-python-2':
+                if os.path.exists(sys.argv[2]):
+                    PYLINT2_LIST = [sys.argv[2], '-m', 'pylint']
+                else:
+                    sys.stderr.write('{}: {} does not exist\n'.format(sys.argv[0], sys.argv[2]))
+                    sys.exit(1)
+                del sys.argv[1]
+            elif sys.argv[1] == '--which-python-3':
+                if os.path.exists(sys.argv[2]):
+                    PYLINT3_LIST = [sys.argv[2], '-m', 'pylint']
+                else:
+                    sys.stderr.write('{}: {} does not exist\n'.format(sys.argv[0], sys.argv[2]))
+                    sys.exit(1)
+                del sys.argv[1]
+            elif sys.argv[1] in '--to-pylint':
+                self.to_pylint.extend(sys.argv[2:])
+                del sys.argv[2:]
+            elif sys.argv[1] in ['--help', '-h']:
+                usage(0)
+            else:
+                sys.stderr.write('%s: Unrecognized option: %s\n' % (sys.argv[0], sys.argv[1]))
+                usage(1)
+            del sys.argv[1]
+
+        self.significant_found = False
+        self.messages_of_interest = []
+        self.pylints = list()
+
+    def check(self):
+        '''Check command line options for suitability'''
+        if PYLINT2_LIST is None:
+            pass
+        elif not PYLINT2_LIST:
+            self.pylints.append([DEFAULT_PYLINT_2])
+        else:
+            self.pylints.append(PYLINT2_LIST)
+        if PYLINT3_LIST is None:
+            pass
+        elif not PYLINT3_LIST:
+            self.pylints.append([DEFAULT_PYLINT_3])
+        else:
+            self.pylints.append(PYLINT3_LIST)
+        if not self.pylints:
+            sys.stderr.write('%s: No python 2.x /and/ no python 3.x.  Nothing to do.\n' % (sys.argv[0], ))
+            sys.exit(1)
+
+
+def check_one(options, pylint):
+    '''Check one pylint'''
+    traceback_count = 0
+    command = pylint
+    always_options = [
+        ('--init-hook=import sys; sys.path.append("%s"); sys.path.append(".")' % os.path.expanduser('~/lib')),
+        '--max-line-length=133',
+        "--indent-string=    ",
+        '--module-rgx=[A-Za-z_][-a-zA-Z0-9_]+$',
+        '--class-rgx=[A-Za-z_][-a-zA-Z0-9_]+$',
+    ]
+    command.extend(always_options)
+    command.extend(options.to_pylint)
+    if options.verbose:
+        sys.stderr.write('\n{}\n\n'.format(command))
+    output_lines = get_output_ignore_exit_code(command)
+    if options.verbose:
+        sys.stderr.write('Output from {} was:\n'.format(pylint, ))
+        for line in output_lines:
+            sys.stderr.write('    {}\n'.format(line))
+        sys.stderr.write('\n')
+    if len(output_lines) == 1 and output_lines[0] == '':
+        sys.stderr.write('Error, {} returned no output\n'.format(pylint))
+        sys.exit(1)
+    if has_traceback(output_lines):
+        sys.stderr.write('\n{}: Detected {} traceback:\n'.format(sys.argv[0], pylint))
+        sys.stderr.write('\n'.join(output_lines))
+        traceback_count += 1
+    elif has_usage_message(output_lines):
+        sys.stderr.write('{}: {} gave usage message\n'.format(sys.argv[0], pylint))
+        sys.stderr.write('\n'.join(output_lines))
+        traceback_count += 1
+    elif not has_score_message(output_lines):
+        sys.stderr.write('{}: {} gave no score message\n'.format(sys.argv[0], pylint))
+        sys.stderr.write('\n'.join(output_lines))
+        traceback_count += 1
+    else:
+        relevant_lines = [output_line for output_line in output_lines if is_relevant_line(output_line)]
+        pruned_lines = set(remove_semi_relevant(relevant_lines))
+        if pruned_lines:
+            options.significant_found = True
+            for relevant_line in relevant_lines:
+                if relevant_line in pruned_lines:
+                    prefix = b'relevant     '
+                else:
+                    prefix = b'semirelevant '
+                options.messages_of_interest.append(prefix + relevant_line)
+    return traceback_count
+
+
+def main():
+    '''Main function'''
+
+    options = Options()
+    options.check()
+
+    traceback_count = 0
+
+    for pylint in sorted(options.pylints):
+        traceback_count += check_one(options, pylint)
+
+    if traceback_count:
+        sys.stderr.write('\n%s pylint tracebacks detected\n' % traceback_count)
+
+    if traceback_count:
+        sys.exit(1)
+    else:
+        if options.significant_found:
+            for message_of_interest in options.messages_of_interest:
+                sys.stderr.write('%s\n' % message_of_interest.decode('ISO-8859-1'))
+            sys.exit(1)
+        else:
+            sys.exit(0)
+
+
+main()

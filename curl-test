@@ -1,0 +1,81 @@
+#!/bin/bash
+
+set -eu
+set -o pipefail
+
+# ~/.grok-auth-data must be of the form apikey:password .
+# A trailing newline is optional.
+auth_data=$(set -eu; set -o pipefail; cat ~/.grok-auth-data)
+
+base_url='https://scorpius-gead.grokstream.com'
+
+opts="--silent --insecure"
+
+function pprint
+{
+    python3 -c 'import sys, json, pprint; pprint.pprint(json.loads(sys.stdin.read()))'
+}
+
+function list_metrics
+{
+    curl \
+        --request GET \
+        $opts \
+        --user "$auth_data" \
+        "$base_url"/_metrics/custom
+}
+
+function post_custom_metric_datum
+{
+    timestamp=@
+    value=@
+
+    while [ "$#" -ge 1 ]
+    do
+        case "$1" in
+            --timestamp)
+                # I believe this must be an integer. Floats do not work. Strings do not work.
+                timestamp="$2"
+                shift
+                ;;
+            --value)
+                # This can be a float.  Strings do not work.
+                value="$2"
+                shift
+                ;;
+            *)
+                echo "$0: post_custom_metric_datum: unrecognized option: $1" 1>&2
+                exit 1
+                ;;
+        esac
+        shift
+    done
+
+    if [ "$timestamp" = "@" ]
+    then
+        echo "$0: post_custom_metric_data: --timestamp is a required option" 1>&2
+        exit 1
+    fi
+
+    if [ "$value" = "@" ]
+    then
+        echo "$0: post_custom_metric_data: --value is a required option" 1>&2
+        exit 1
+    fi
+
+    # This was very helpful:
+    # https://grok.zendesk.com/hc/en-us/articles/231758507-Submitting-Custom-Sources-with-the-REST-API
+    curl \
+        --request POST \
+        $opts \
+        --user "$auth_data" \
+        --data '{"timestamp":'"$timestamp"',"value":'"$value"'}'  \
+        "$base_url/_metrics/custom/from-curl"
+}
+
+list_metrics | pprint
+post_custom_metric_datum --timestamp 0 --value 1 | pprint
+post_custom_metric_datum --timestamp 1 --value 2.3 | pprint
+post_custom_metric_datum --timestamp 2 --value 4 | pprint
+list_metrics | pprint
+

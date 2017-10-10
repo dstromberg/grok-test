@@ -1,0 +1,207 @@
+#!/usr/bin/python3
+
+"""Tests for EveryNSeconds class."""
+
+from __future__ import print_function
+
+import sys
+import time
+import functools
+
+import every_n_seconds
+
+
+def timed_function(seconds=3600):
+    """Blip every "seconds" seconds."""
+    time.sleep(seconds)
+    # print('Blip. {}'.format(time.ctime()))
+
+
+def timed_test():
+    """Main function."""
+    # I've intentionally used something that doesn't divide evenly
+    callback = functools.partial(timed_function, seconds=1.0 / 3.0)
+    seconds = 2.0
+    max_reps = 3
+    tolerance = 0.1
+    runner = every_n_seconds.EveryNSeconds(
+        seconds=seconds,
+        resolution=0.01,
+        max_reps=max_reps,
+    )
+    time0 = time.time()
+    while not runner.is_done_running(callback=callback):
+        pass
+    time1 = time.time()
+    difference = time1 - time0
+    expected_duration = seconds * max_reps
+    if \
+            expected_duration - tolerance < \
+            abs(difference) < \
+            expected_duration + tolerance:
+        return True
+
+    string = '{}: timed_test: duration bad, not near {}: {}\n'
+    tuple_ = (sys.argv[0], expected_duration, difference)
+    sys.stderr.write(string.format(*tuple_))
+    return False
+
+
+COUNTED_REPS = 0
+
+
+def counted_function(seconds=3600):
+    """Blip every "seconds" seconds."""
+    # pylint: disable=global-statement
+    global COUNTED_REPS
+    COUNTED_REPS += 1
+    time.sleep(seconds)
+    # print('Blip. {}'.format(time.ctime()))
+
+
+def counted_test():
+    """Main function."""
+    callback = functools.partial(counted_function, seconds=2)
+    runner = every_n_seconds.EveryNSeconds(
+        seconds=0.5,
+        resolution=0.01,
+        max_reps=2,
+    )
+    while not runner.is_done_running(callback=callback):
+        pass
+
+    if COUNTED_REPS == 2:
+        return True
+
+    string = '{}: counted_test: rep count bad, not 2: {}\n'
+    sys.stderr.write(string.format(sys.argv[0], COUNTED_REPS))
+    return False
+
+
+class RetryExc(Exception):
+    """
+    We raise this to test if a retry exception will incur an extra delay or
+    not.
+    """
+
+RETRY_EXC_REPS = 0
+
+
+def retry_exc_function(seconds=3600):
+    # pylint: disable=global-statement
+    """Blip every "seconds" seconds."""
+    global RETRY_EXC_REPS
+    RETRY_EXC_REPS += 1
+    if RETRY_EXC_REPS == 2:
+        raise RetryExc
+    time.sleep(seconds)
+    # print('Blip. {} {}'.format(RETRY_EXC_REPS, time.ctime()))
+
+
+def retry_exc_test():
+    """Main function."""
+    # I've intentionally used something that doesn't divide evenly
+    callback = functools.partial(retry_exc_function, seconds=1.0 / 3.0)
+    seconds = 2.0
+    max_reps = 3
+    tolerance = 0.1
+    runner = every_n_seconds.EveryNSeconds(
+        seconds=seconds,
+        resolution=0.01,
+        max_reps=max_reps,
+        retry_exceptions=(RetryExc, ),
+    )
+    time0 = time.time()
+    while not runner.is_done_running(callback=callback):
+        pass
+    time1 = time.time()
+    difference = time1 - time0
+    expected_duration = seconds * max_reps
+    if \
+            expected_duration - tolerance < \
+            abs(difference) < \
+            expected_duration + tolerance:
+        return True
+
+    string = '{}: timed_test: duration bad, not near {}: {}\n'
+    tuple_ = (sys.argv[0], expected_duration, difference)
+    sys.stderr.write(string.format(*tuple_))
+    return False
+
+
+class NoRetryExc(Exception):
+    """
+    We raise this to test if a no-retry exception will terminate iteration.
+    """
+
+NO_RETRY_EXC_REPS = 0
+
+
+def no_retry_exc_function(seconds=3600):
+    # pylint: disable=global-statement
+    """Blip every "seconds" seconds."""
+    global NO_RETRY_EXC_REPS
+    NO_RETRY_EXC_REPS += 1
+    if NO_RETRY_EXC_REPS == 2:
+        raise NoRetryExc
+    time.sleep(seconds)
+    # print('Blip. {} {}'.format(RETRY_EXC_REPS, time.ctime()))
+
+
+def no_retry_exc_test():
+    """Main function."""
+    # I've intentionally used something that doesn't divide evenly
+    callback = functools.partial(no_retry_exc_function, seconds=1.0 / 3.0)
+    seconds = 2.0
+    max_reps = 3
+    tolerance = 0.1
+    runner = every_n_seconds.EveryNSeconds(
+        seconds=seconds,
+        resolution=0.01,
+        max_reps=max_reps,
+        retry_exceptions=(),
+    )
+    time0 = time.time()
+    try:
+        while not runner.is_done_running(callback=callback):
+            pass
+    except NoRetryExc:
+        pass
+    else:
+        sys.stderr.write('{}: Did not get NoRetryExc\n'.format(sys.argv[1]))
+        return False
+    time1 = time.time()
+    difference = time1 - time0
+    expected_duration = seconds * 1
+    if \
+            expected_duration - tolerance < \
+            abs(difference) < \
+            expected_duration + tolerance:
+        return True
+
+    string = '{}: timed_test: duration bad, not near {}: {}\n'
+    tuple_ = (sys.argv[0], expected_duration, difference)
+    sys.stderr.write(string.format(*tuple_))
+    return False
+
+
+def main():
+    """Main function."""
+    # We could use py.test or nose or something, but I like the control
+    # afforded by doing it manually
+    all_good = True
+
+    all_good &= timed_test()
+    all_good &= counted_test()
+    all_good &= retry_exc_test()
+    all_good &= no_retry_exc_test()
+
+    if all_good:
+        print('All tests passed.')
+        sys.exit(0)
+    else:
+        sys.stderr.write('{}: One or more tests failed\n'.format(sys.argv[0]))
+        sys.exit(1)
+
+
+main()
